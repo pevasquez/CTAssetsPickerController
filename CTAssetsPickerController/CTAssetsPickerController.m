@@ -34,6 +34,7 @@
 #import "CTAssetScrollView.h"
 #import "CTAssetsPageViewController.h"
 #import "CTAssetsViewControllerTransition.h"
+#import "CTDownloadProgressView.h"
 #import "NSBundle+CTAssetsPickerController.h"
 #import "UIImage+CTAssetsPickerController.h"
 #import "NSNumberFormatter+CTAssetsPickerController.h"
@@ -57,6 +58,7 @@ NSString * const CTAssetsPickerDidDeselectAssetNotification = @"CTAssetsPickerDi
 
 @property (nonatomic, strong) PHImageRequestOptions *thumbnailRequestOptions;
 
+@property (nonatomic, strong) CTDownloadProgressView *progressView;
 @end
 
 
@@ -618,8 +620,89 @@ NSString * const CTAssetsPickerDidDeselectAssetNotification = @"CTAssetsPickerDi
 
 - (void)finishPickingAssets:(id)sender
 {
-    if ([self.delegate respondsToSelector:@selector(assetsPickerController:didFinishPickingAssets:)])
-        [self.delegate assetsPickerController:self didFinishPickingAssets:self.selectedAssets];
+    if(self.countOfSelectedAssets == 1){
+        
+        PHVideoRequestOptions *options = [PHVideoRequestOptions new];
+        options.networkAccessAllowed = NO;
+        
+        // Request the video with no network access. If it is in iCloud, query the user about it.
+        [PHImageManager.defaultManager requestAVAssetForVideo:self.selectedAssets[0] options:options resultHandler:^(AVAsset * _Nullable asset, AVAudioMix * _Nullable audioMix, NSDictionary * _Nullable info) {
+            if (asset) {
+                if ([self.delegate respondsToSelector:@selector(assetsPickerController:didFinishPickingAssets:)]){
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self.delegate assetsPickerController:self didFinishPickingAssets:@[asset]];
+                    });
+                }
+            }
+            else if([info[PHImageResultIsInCloudKey] boolValue]){
+                NSLog(@"Video is in iCloud!!!!");
+                UIAlertController *alertController = [UIAlertController
+                                                      alertControllerWithTitle:@"Online Video"
+                                                      message:@"This video is in iCloud, do you want to download it?"
+                                                      preferredStyle:UIAlertControllerStyleAlert];
+                
+                UIAlertAction *cancelAction = [UIAlertAction
+                                               actionWithTitle:@"Cancel"
+                                               style:UIAlertActionStyleCancel
+                                               handler:nil];
+                
+                void (^downloadHandler)(UIAlertAction *) = ^(UIAlertAction *action){
+                    options.networkAccessAllowed = YES;
+                    
+                    self.progressView.progressLabel.text = @"0%";
+                    
+                    options.progressHandler = ^(double progress, NSError *error, BOOL *stop, NSDictionary *info)
+                    {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            NSString *progressText = [NSString stringWithFormat:@"%d%%", (int)(progress * 100)];
+                            self.progressView.progressLabel.text = progressText;
+                        });
+                    };
+                    
+                    // Instantiate the nib content without any reference to it.
+                    NSArray *nibContents = [[NSBundle mainBundle] loadNibNamed:@"CTDownloadProgressView" owner:nil options:nil];
+                    
+                    // Find the view among nib contents (not too hard assuming there is only one view in it).
+                    self.progressView = [nibContents lastObject];
+                    self.progressView.frame = self.view.frame;
+                    
+                    // Add to the view hierarchy (thus retain).
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self.view addSubview:self.progressView];
+                    });
+                    
+                    [PHImageManager.defaultManager requestAVAssetForVideo:self.selectedAssets[0] options:options resultHandler:^(AVAsset * _Nullable asset, AVAudioMix * _Nullable audioMix, NSDictionary * _Nullable info) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            if(asset){
+                                if ([self.delegate respondsToSelector:@selector(assetsPickerController:didFinishPickingAssets:)])
+                                    [self.delegate assetsPickerController:self didFinishPickingAssets:@[asset]];
+                                
+                            }else{
+                                //alert about an error!!!
+                            }
+                        });
+                    }];
+                };
+                
+                UIAlertAction *okAction = [UIAlertAction
+                                           actionWithTitle:@"Download"
+                                           style:UIAlertActionStyleDefault
+                                           handler:downloadHandler];
+                
+                [alertController addAction:cancelAction];
+                [alertController addAction:okAction];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self presentViewController:alertController animated:YES completion:nil];
+                });
+                
+            }
+        }];
+    }
+    else{
+        
+        if ([self.delegate respondsToSelector:@selector(assetsPickerController:didFinishPickingAssets:)])
+            [self.delegate assetsPickerController:self didFinishPickingAssets:self.selectedAssets];
+    }
 }
 
 
